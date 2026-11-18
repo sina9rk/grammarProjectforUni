@@ -1,48 +1,147 @@
 import { useState } from "react";
 import "./App.css";
 
-import { grammar, type GrammarSymbol, type Terminal } from "./grammar";
+import {
+  grammar,
+  type GrammarSymbol,
+  type ParseNode,
+  type ParseResult,
+  type Terminal,
+  type WorkItem,
+} from "./grammar";
 
 import { isNonTerminal } from "./utils/isNonTerminalFun";
+
+// نمایش بازگشتی هر گره درخت
+function TreeBranch({ node }: { node: ParseNode }) {
+  return (
+    <div className="flex min-w-max flex-col items-center">
+      <div
+        className={`rounded-xl px-4 py-3 font-mono text-sm font-bold shadow-[5px_5px_10px_#c8ccd2,-5px_-5px_10px_#ffffff] ${
+          node.accepted
+            ? "border border-[#4e9d83] bg-[#e1f0e9] text-[#39866d]"
+            : "bg-[#e6eaf0] text-[#5879b4]"
+        }`}
+        dir="ltr"
+      >
+        {node.form.join(" ")}
+        {node.accepted && <span className="ml-2 text-xs">✓</span>}
+      </div>
+
+      {node.children.length > 0 && (
+        <>
+          <div className="h-6 w-px bg-[#aebbd0]" />
+
+          <div className="flex items-start justify-center border-t border-[#aebbd0]">
+            {node.children.map((child) => (
+              <div key={child.id} className="flex flex-col items-center px-3">
+                <div className="h-6 w-px bg-[#aebbd0]" />
+                <TreeBranch node={child} />
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 function App() {
   const [inputText, setInputText] = useState("id + id");
   const [duration, setDuration] = useState<number>(0);
   const [res, setRes] = useState<boolean | null>(null);
+  const [tree, setTree] = useState<ParseNode | null>(null);
   const [error, setError] = useState("");
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
-  function parse(input: Terminal[]): boolean {
-    const worklist: GrammarSymbol[][] = [["E"]];
-    const visited = new Set<string>();
+  // الگوریتم اصلی
+  function parse(input: Terminal[]): ParseResult {
+    let nextId = 1;
+
+    const root: ParseNode = {
+      id: 0,
+      form: ["E"],
+      children: [],
+      accepted: false,
+    };
+
+    const worklist: WorkItem[] = [
+      {
+        form: root.form,
+        node: root,
+        ancestors: new Set([JSON.stringify(root.form)]),
+      },
+    ];
 
     while (worklist.length > 0) {
-      const form = worklist.shift();
+      const current = worklist.shift();
 
-      if (!form || form.length > input.length) {
+      if (!current) continue;
+
+      const { form, node, ancestors } = current;
+
+      if (form.length > input.length) {
         continue;
       }
 
-      const selected = JSON.stringify(form);
-
-      if (visited.has(selected)) {
+      if (!isValid(form, input)) {
         continue;
       }
 
-      visited.add(selected);
+      if (isAccepted(form, input)) {
+        node.accepted = true;
+        continue;
+      }
 
-      if (isValid(form, input)) {
-        if (isAccepted(form, input)) {
-          return true;
+      const newForms = expand(form);
+
+      newForms.forEach((newForm) => {
+        if (newForm.length > input.length) {
+          return;
         }
 
-        const newRes = expand(form);
-        worklist.push(...newRes);
-      }
+        const selected = JSON.stringify(newForm);
+
+        // جلوگیری از تکرار یک فرم در مسیر فعلی
+        if (ancestors.has(selected)) {
+          return;
+        }
+
+        const child: ParseNode = {
+          id: nextId++,
+          form: newForm,
+          children: [],
+          accepted: false,
+        };
+
+        node.children.push(child);
+
+        worklist.push({
+          form: newForm,
+          node: child,
+          ancestors: new Set([...ancestors, selected]),
+        });
+      });
     }
 
-    return false;
+    // حذف شاخه‌هایی که به پذیرش نمی‌رسند
+    function keepSuccessfulBranches(node: ParseNode): boolean {
+      node.children = node.children.filter((child) =>
+        keepSuccessfulBranches(child),
+      );
+
+      return node.accepted || node.children.length > 0;
+    }
+
+    const accepted = keepSuccessfulBranches(root);
+
+    return {
+      accepted,
+      root,
+    };
   }
 
+  // بررسی پذیرش دقیق فرم
   function isAccepted(form: GrammarSymbol[], input: Terminal[]): boolean {
     if (form.length !== input.length) {
       return false;
@@ -57,6 +156,7 @@ function App() {
     return true;
   }
 
+  // بررسی معتبر بودن پیشوند فرم
   function isValid(form: GrammarSymbol[], input: Terminal[]): boolean {
     for (let i = 0; i < form.length; i++) {
       const symbol = form[i];
@@ -77,6 +177,7 @@ function App() {
     return true;
   }
 
+  // گسترش Non-terminalها
   function expand(form: GrammarSymbol[]): GrammarSymbol[][] {
     const result: GrammarSymbol[][] = [];
 
@@ -99,9 +200,12 @@ function App() {
     return result;
   }
 
+  // اجرای الگوریتم
   function grammarResult() {
     setError("");
     setRes(null);
+    setTree(null);
+    setIsModalOpen(false);
 
     const trimmedInput = inputText.trim();
 
@@ -125,7 +229,8 @@ function App() {
     const end = performance.now();
 
     setDuration(end - start);
-    setRes(result);
+    setRes(result.accepted);
+    setTree(result.root);
   }
 
   return (
@@ -153,7 +258,6 @@ function App() {
               <span className="text-[10px] font-bold tracking-[2px] text-[#8996aa]">
                 01 / GRAMMAR
               </span>
-
               <h2 className="mt-2 text-lg font-bold">Production Rules</h2>
             </div>
 
@@ -211,6 +315,7 @@ function App() {
             onChange={(event) => {
               setInputText(event.target.value);
               setRes(null);
+              setTree(null);
               setError("");
             }}
             placeholder="Example: id + id"
@@ -249,7 +354,7 @@ function App() {
                 Your parsing result will appear here.
               </p>
             ) : (
-              <div className="flex items-center gap-4">
+              <div className="flex flex-wrap items-center gap-4">
                 <span
                   className={`grid size-12 shrink-0 place-items-center rounded-2xl bg-[#e6eaf0] text-2xl font-extrabold shadow-[5px_5px_10px_#c8ccd2,-5px_-5px_10px_#ffffff] ${
                     res ? "text-[#4e9d83]" : "text-[#c65c68]"
@@ -273,6 +378,15 @@ function App() {
                       : "The input does not belong to this grammar."}
                   </p>
                 </div>
+
+                {res && tree && (
+                  <button
+                    onClick={() => setIsModalOpen(true)}
+                    className="rounded-xl bg-[#e6eaf0] px-5 py-3 text-sm font-bold text-[#5879b4] shadow-[5px_5px_10px_#c8ccd2,-5px_-5px_10px_#ffffff] transition-all hover:text-[#3d66aa] active:shadow-[inset_4px_4px_8px_#c8ccd2,inset_-4px_-4px_8px_#ffffff]"
+                  >
+                    View Parse Tree
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -290,6 +404,59 @@ function App() {
           Compiler Design · Top-Down Parsing
         </footer>
       </div>
+
+      {/* Tree Modal */}
+      {isModalOpen && tree && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[#354158]/50 p-3 backdrop-blur-sm sm:p-6"
+          onClick={() => setIsModalOpen(false)}
+        >
+          <div
+            className="flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-3xl bg-[#e6eaf0] shadow-[12px_12px_30px_#8f949b,-12px_-12px_30px_#ffffff]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-[#d4d9e0] p-5 sm:p-7">
+              <div>
+                <span className="text-[10px] font-bold tracking-[2px] text-[#8996aa]">
+                  PARSING VISUALIZATION
+                </span>
+
+                <h2 className="mt-2 text-xl font-extrabold">Parse Tree</h2>
+
+                <p className="mt-1 text-xs text-[#8996aa]">
+                  Only successful branches are displayed.
+                </p>
+              </div>
+
+              <button
+                onClick={() => setIsModalOpen(false)}
+                aria-label="Close modal"
+                className="grid size-10 place-items-center rounded-xl text-xl text-[#8996aa] shadow-[4px_4px_8px_#c8ccd2,-4px_-4px_8px_#ffffff] hover:text-[#c65c68]"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-auto p-8 sm:p-12">
+              <div className="flex min-w-max justify-center">
+                <TreeBranch node={tree} />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-5 border-t border-[#d4d9e0] px-5 py-4 text-xs text-[#8996aa]">
+              <span className="flex items-center gap-2">
+                <span className="size-3 rounded bg-[#e6eaf0] shadow-[2px_2px_4px_#c8ccd2,-2px_-2px_4px_#ffffff]" />
+                Derivation
+              </span>
+
+              <span className="flex items-center gap-2">
+                <span className="size-3 rounded border border-[#4e9d83] bg-[#e1f0e9]" />
+                Accepted
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
